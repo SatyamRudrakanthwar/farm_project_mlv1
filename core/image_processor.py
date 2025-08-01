@@ -3,7 +3,10 @@ import supervision as sv
 from ultralytics import YOLO
 
 # Load the trained YOLO model
-model_path = "D:/projects/AgriSavant/ETL PEST DETECTION CODE MODULARITY/pest_etl_app/models/best.pt"
+model_path = os.path.join("models", "best.pt")
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"Model file not found at: {model_path}")
+
 model = YOLO(model_path)
 
 def process_image(image_path):
