@@ -21,9 +21,8 @@ def get_model(num_classes=2):
     return model
 
 # Run inference on PIL image and extract leaf masks
-def run_inference_from_pil(pil_image, model_path="D:/projects/AgriSavant/ETL PEST DETECTION CODE MODULARITY/pest_etl_app/models/leaf_maskrcnn.pth", output_dir="data/outputs", conf_thresh=0.5):
+def run_inference_from_pil(pil_image, model_path=os.path.join("models", "leaf_maskrcnn.pth"), output_dir="data/outputs", conf_thresh=0.5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     model = get_model()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval().to(device)
