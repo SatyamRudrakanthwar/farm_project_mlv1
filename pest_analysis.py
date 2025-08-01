@@ -109,8 +109,8 @@ def run_analysis(inputs):
             elif selected_card == "Color Analysis":
                 st.subheader("Leaf Color Analysis")
 
-                input_dir = r"D:\projects\AgriSavant\ETL PEST DETECTION CODE MODULARITY\pest_etl_app\data\outputs"
-                color_output_dir = r"D:\projects\AgriSavant\ETL PEST DETECTION CODE MODULARITY\pest_etl_app\data\colour_outputs"
+                input_dir = os.path.join("data", "outputs")
+                color_output_dir = os.path.join("data", "colour_outputs")
                 bar_plot_dir = os.path.join(color_output_dir, "bar_plots")
                 os.makedirs(bar_plot_dir, exist_ok=True)
 
@@ -201,8 +201,7 @@ def run_analysis(inputs):
 
             elif selected_card == "bubble plot":
                 st.subheader("🫧 Bubble Plot of Color Distribution")
-
-                input_dir = r"D:\projects\AgriSavant\ETL PEST DETECTION CODE MODULARITY\pest_etl_app\data\outputs"
+                input_dir = os.path.join("data", "outputs")
                 bubble_output_dir = os.path.join("data", "Bubble_Plots")
                 os.makedirs(bubble_output_dir, exist_ok=True)
 
@@ -243,8 +242,7 @@ def run_analysis(inputs):
 
             elif selected_card == "Cluster and Mark Palette":
                 st.subheader("🎨 Cluster and Mark Color Palette")
-
-                input_dir = r"D:\projects\AgriSavant\ETL PEST DETECTION CODE MODULARITY\pest_etl_app\data\outputs"
+                input_dir = os.path.join("data", "outputs")
                 palette_output_dir = os.path.join("data", "Palette_Outputs")
                 os.makedirs(palette_output_dir, exist_ok=True)
 
