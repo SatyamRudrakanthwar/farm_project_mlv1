@@ -7,11 +7,14 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Dict
 from PIL import Image, ImageDraw
 import os
-import zipfile
-import colorsys
-from PIL import ImageFont, ImageDraw
+import pandas as pd
+from sklearn.metrics import silhouette_score
+from colormath.color_objects import LabColor, sRGBColor
+from colormath.color_conversions import convert_color
+from colormath.color_diff import delta_e_cie2000
 
-# ✅ Match RGB color to nearest CSS3 color name
+
+#  Match RGB color to nearest CSS3 color name
 def closest_css3_color(requested_color: Tuple[int, int, int]) -> str:
     min_dist = float('inf')
     closest_name = None
@@ -24,15 +27,17 @@ def closest_css3_color(requested_color: Tuple[int, int, int]) -> str:
     return closest_name
 
 
-# ✅ Generate vein skeleton from grayscale image
+#  Generate vein skeleton from grayscale image
 def leaf_vein_skeleton(image_path: str) -> np.ndarray:
     image = cv2.imread(image_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    # Use adaptive threshold instead of fixed Canny thresholds
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(blurred)
-    edges = cv2.Canny(enhanced, 30, 100) #reduced to 30 from 50 , 100 from 150(reduce thresholds for finer details)  
+    # Bilateral filter to preserve edges while denoising
+    filtered = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(filtered)
+    edges = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                              cv2.THRESH_BINARY_INV, 15, 3)
+  
     
     # Morphological operations to clean up edges
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -50,62 +55,27 @@ def leaf_vein_skeleton(image_path: str) -> np.ndarray:
     return skeleton
 
 
-# ✅ Generate leaf boundary mask using dilation
+#  Generate leaf boundary mask using dilation
 def leaf_boundary_dilation(image_path: str) -> np.ndarray:
     image = cv2.imread(image_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    a_channel = lab[:, :, 1]
+    _, binary = cv2.threshold(a_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Ensure leaf is foreground (invert if needed)
     if np.sum(binary == 255) < np.sum(binary == 0):
         binary = cv2.bitwise_not(binary)
+
+    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # if np.sum(binary == 255) < np.sum(binary == 0):
+    #     binary = cv2.bitwise_not(binary)
     kernel = np.ones((5, 5), np.uint8)
     dilated = cv2.dilate(binary, kernel, iterations=1)
     boundary = cv2.subtract(dilated, binary)
     return boundary
 
-# Color validation function to filter outliers
-def is_valid_leaf_color(rgb_color: np.ndarray, color_type: str = "general") -> bool:
-    r, g, b = rgb_color
-    
-    if r > 240 and g > 240 and b > 240: # filter out nearly white
-        return False
-    if r < 20 and g < 20 and b < 20: # Filter out near-black pixels
-        return False
-    
-    total_intensity = r + g + b
-    if total_intensity == 0:
-        return False
-    
-    green_ratio = g / total_intensity
-    
-    if color_type == "vein":
-        # Veins can be darker but should still have some green
-        return green_ratio > 0.25 and g > 30
-    elif color_type == "boundary":
-        # Boundaries should have reasonable green content  
-        return green_ratio > 0.28 and g > 40
-    else:
-        # General leaf color validation
-        return green_ratio > 0.25 and g > 35
-
-
-# outlier detection
-def remove_color_outliers(colors: np.ndarray, threshold: float = 2.0) -> np.ndarray:
-    
-    if len(colors) <= 3:
-        return colors
-    
-    median = np.median(colors, axis=0)
-    mad = np.median(np.abs(colors - median), axis=0)
-    mad = np.where(mad == 0, 1, mad)
-
-    modified_z_scores = 0.6745 * (colors - median) / mad
-    
-    # Keep colors where all channels are within threshold
-    outlier_mask = np.all(np.abs(modified_z_scores) < threshold, axis=1)
-    
-    return colors[outlier_mask]
-
-# ✅ Extract dominant colors around a binary mask
+# Extract dominant colors around a binary mask
 def extract_colors_around_mask(image_path: str, mask: np.ndarray, buffer_ratio=0.15, num_colors=8, color_type="general"):
     image_bgr = cv2.imread(image_path)
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -120,45 +90,25 @@ def extract_colors_around_mask(image_path: str, mask: np.ndarray, buffer_ratio=0
     
     if len(masked_pixels) == 0:
         return {}, [], [], []
-    
-    # Filter valid pixels
-    valid_pixels = []
-    for pixel in masked_pixels:
-        if is_valid_leaf_color(pixel, color_type):
-            valid_pixels.append(pixel)
-    
-    valid_pixels = np.array(valid_pixels)
-    
-    if len(valid_pixels) == 0:
-        print(f"Warning: No valid {color_type} colors found")
-        return {}, [], [], []
-    
-    # Remove outliers from valid pixels
-    filtered_pixels = remove_color_outliers(valid_pixels, threshold=2.5)
-    
-    if len(filtered_pixels) == 0:
-        print(f"Warning: All {color_type} colors were filtered out as outliers")
-        filtered_pixels = valid_pixels  # Fallback to valid pixels
-    
-    # Use filtered pixels for clustering instead of original masked_pixels
-    kmeans = KMeans(n_clusters=min(num_colors, len(filtered_pixels)), random_state=42)
-    labels = kmeans.fit_predict(filtered_pixels)
+        
+    kmeans = KMeans(n_clusters=min(num_colors, len(masked_pixels)), random_state=42)
+    labels = kmeans.fit_predict(masked_pixels)
 
     color_stats: Dict[str, Dict] = {}
-    total_pixels = len(filtered_pixels)  # Use filtered pixels count
+    total_pixels = len(masked_pixels)  # Use filtered pixels count
 
     for i in range(kmeans.n_clusters):
-        idx = np.where(labels == i)[0]  # These indices now match filtered_pixels
+        idx = np.where(labels == i)[0]  
         if len(idx) == 0:
             continue
             
-        cluster_colors = filtered_pixels[idx]  # Now this indexing works correctly
+        cluster_colors = masked_pixels[idx]  
         mean_color = np.mean(cluster_colors, axis=0).astype(int)
         
-        # Final validation of cluster center
-        if not is_valid_leaf_color(mean_color, color_type):
-            print(f"Skipping invalid cluster color: {mean_color}")
-            continue
+        # # Final validation of cluster center
+        # if not is_valid_leaf_color(mean_color, color_type):
+        #     print(f"Skipping invalid cluster color: {mean_color}")
+        #     continue
         
         r, g, b = mean_color
         hex_code = f"#{r:02X}{g:02X}{b:02X}"
@@ -184,7 +134,7 @@ def visualize_results(labels, percentages, colors):
     ax.pie(percentages, labels=labels, colors=colors, autopct='%1.1f%%')
     ax.set_title("Dominant Colors Around Region")
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
 
 def extract_leaf_colors_with_locations(image_path, num_colors=5, save_dir=None):
@@ -225,7 +175,7 @@ def extract_leaf_colors_with_locations(image_path, num_colors=5, save_dir=None):
     ax.set_xticks([])
     ax.set_ylabel("Pixel Count")
     ax.set_title("Dominant Colors in leaf image")
-    plt.show()
+    # plt.show()
 
     # Save bar chart
     if save_dir:
@@ -256,9 +206,8 @@ def extract_leaf_colors_with_locations(image_path, num_colors=5, save_dir=None):
 
     return fig_main, region_figs
 
-
-# ✅ Bubble plot for color distribution
-def bubble_plot(color_stats, title="Color Bubble Plot", save_path="bubble_plot.png", zip_path="bubble_plot.zip"):
+# Bubble plot of dominant colors
+def bubble_plot(color_stats, title="Color Bubble Plot", save_path=None):
 
     if not color_stats:
         print("Skipping bubble plot — color_stats is empty.")
@@ -277,32 +226,32 @@ def bubble_plot(color_stats, title="Color Bubble Plot", save_path="bubble_plot.p
 
     for i, label in enumerate(labels):
         ax.text(x[i], y[i] + 0.03, label.split("\n")[1], ha='center', fontsize=8)
-
+        
+    # Calculate and display green percentage below each bubble
     for i, rgb in enumerate(rgb_values):
         r, g, b = rgb
         total_intensity = r + g + b
-        green_percentage = (g / total_intensity) * 100 if total_intensity > 0 else 0
-        ax.text(x[i], y[i] - 0.02, f"Green: {green_percentage:.1f}%",
+        if total_intensity > 0:
+            green_percentage = (g / total_intensity) * 100
+        else:
+            green_percentage = 0
+    
+        # Display green percentage below the bubble
+        ax.text(x[i], y[i] - 0.02, f"Green: {green_percentage:.1f}%", 
                 ha='center', fontsize=8, color='green', weight='bold')
 
     ax.set_xlim(-1, len(rgb_values))
     ax.axis('off')
     ax.set_title(title)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    # save the bubble plot
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Bubble plot saved to {save_path}")
+        # plt.show()
+        plt.close(fig)
+        return fig
 
-    # Create zip archive
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
-        zipf.write(save_path, os.path.basename(save_path))
-    print(f"✅ Bubble plot zipped as {zip_path}")
-
-    plt.show()
-    plt.close(fig)
-
-    return fig
-
-
-# ✅ Cluster and mark colors on a palette, save as image and zip
 # color palette
 def hex_to_rgb(hex_color):
     if isinstance(hex_color, str) and hex_color.startswith('#'):
@@ -329,7 +278,7 @@ def parse_colors(color_data):
     return colors
 
 
-def cluster_and_mark_palette(vein_colors, boundary_colors, num_clusters=5, output_path="clustered_palette.png", zip_path="clustered_palette.zip"):
+def cluster_and_mark_palette(vein_colors, boundary_colors, num_clusters=5, output_path="clustered_palette.png"):
     vein_rgb = parse_colors(vein_colors)
     boundary_rgb = parse_colors(boundary_colors)
     
@@ -338,26 +287,26 @@ def cluster_and_mark_palette(vein_colors, boundary_colors, num_clusters=5, outpu
     all_colors = vein_rgb + boundary_rgb
     types = ['vein'] * len(vein_rgb) + ['boundary'] * len(boundary_rgb)
     
-    if len(all_colors) == 0:
-        print("No colors provided for clustering.")
-        return []
-    
     # clustering
     colors_array = np.array(all_colors)
     kmeans = KMeans(n_clusters=min(num_clusters, len(all_colors)), random_state=42)
     labels = kmeans.fit_predict(colors_array)
     
-    # create a color palette (HSV spectrum base)
+    # create a color palette
     palette_width, palette_height = 512, 256
     palette = np.zeros((palette_height, palette_width, 3), dtype=np.uint8)
 
     for y in range(palette_height):
         for x in range(palette_width):
+            # Mapping x to hue (0-360 degrees), y to saturation or brightness
             hue = (x / palette_width) * 360
             saturation = 1.0
             value = y / palette_height
-            r, g, b = colorsys.hsv_to_rgb(hue / 360, saturation, value)
-            palette[y, x] = [int(r * 255), int(g * 255), int(b * 255)]
+
+            # Convert HSV to RGB
+            import colorsys
+            r, g, b = colorsys.hsv_to_rgb(hue/360, saturation, value)
+            palette[y, x] = [int(r*255), int(g*255), int(b*255)]
 
     def find_closest_position(target_rgb):
         target = np.array(target_rgb[:3])
@@ -373,53 +322,64 @@ def cluster_and_mark_palette(vein_colors, boundary_colors, num_clusters=5, outpu
                     best_pos = (x, y)
         return best_pos
     
-    cluster_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255)]
-    palette_pil = Image.fromarray(palette)
-    draw = ImageDraw.Draw(palette_pil)
-    font = ImageFont.load_default()
+    # cluster colors for marking
+    cluster_colors = [(255,0,0), (0,255,0), (0,0,255), (255,255,0), (255,0,255)]
     
-    marker_info = []
-
+    palette_pil=Image.fromarray(palette)
+    draw=ImageDraw.Draw(palette_pil) # to draw the text on palette
+    
+    from PIL import ImageFont
+    font=ImageFont.load_default()
+    
+    marker_info=[]
+    data_info=[]
+    
+    # mark points as clusters
     for i, (color, label, color_type) in enumerate(zip(all_colors, labels, types)):
         pos = find_closest_position(color)
         if pos:
             x, y = pos
             marker_color = cluster_colors[label % len(cluster_colors)]
-
+            
             if color_type == 'vein':
-                draw.line([(x - 3, y - 3), (x + 3, y + 3)], fill=marker_color, width=1)
-                draw.line([(x - 3, y + 3), (x + 3, y - 3)], fill=marker_color, width=1)
+                draw.line([(x-3, y-3), (x+3, y+3)], fill=marker_color, width=1)
+                draw.line([(x-3, y+3), (x+3, y-3)], fill=marker_color, width=1) # vein point marked as (x)
             else:
-                draw.line([(x - 3, y), (x + 3, y)], fill=marker_color, width=1)
-                draw.line([(x, y - 3), (x, y + 3)], fill=marker_color, width=1)
-
-            r, g, b = color[:3]
+                draw.line([(x-3, y), (x+3, y)], fill=marker_color, width=1)
+                draw.line([(x, y-3), (x, y+3)], fill=marker_color, width=1)# boundary point marked as (+)
+                
+            r,g,b = color[:3]
             hex_code = f"#{r:02X}{g:02X}{b:02X}"
-            marker_info.append((x, y, hex_code))
-
-    for x, y, hex_code in marker_info:
-        text_x = x + 10 if x <= palette_width - 50 else x - 50
-        text_y = y - 20 if y >= 20 else y + 10
-        draw.text((text_x, text_y), hex_code, fill=(0, 0, 0), font=font)
-
+            marker_info.append((x,y,hex_code))
+            data_info.append({x:x,y:y})
+    df = pd.DataFrame(data_info)
+    df.to_excel('pure diseased folder/excel sheet(analysis)/temp.xlsx', index=False)        
+            
+    for x,y , hex_code in marker_info:        
+            text_x=x + 10
+            text_y= y 
+            
+            if text_x>(palette_width-50):
+                text_x = x-50
+            if text_y < 10:
+                text_y = y +10
+            
+            # Then draw the text
+            draw.text((text_x, text_y), hex_code, fill=(0, 0, 0), font=font)
+    
+    # Convert back to save
     palette = np.array(palette_pil)
     
-    # Save palette image
+    # save palette
     cv2.imwrite(output_path, cv2.cvtColor(palette, cv2.COLOR_RGB2BGR))
-    print(f"✅ Palette saved at {output_path}")
-
-    # Create ZIP file
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
-        zipf.write(output_path, os.path.basename(output_path))
-    print(f"✅ Zipped to {zip_path}")
-
-    # Display
+    print(f"Saved clustered palette to {output_path}")
+    
+    # show results
     plt.figure(figsize=(15, 8))
     plt.imshow(palette)
     plt.title('Color Palette with Clustered Points')
     plt.xlabel("Hue Spectrum")
     plt.ylabel("Brightness")
     plt.tight_layout()
-    plt.show()
-
+    
     return labels
