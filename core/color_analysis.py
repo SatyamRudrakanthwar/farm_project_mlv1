@@ -66,9 +66,6 @@ def leaf_boundary_dilation(image_path: str) -> np.ndarray:
     if np.sum(binary == 255) < np.sum(binary == 0):
         binary = cv2.bitwise_not(binary)
 
-    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # if np.sum(binary == 255) < np.sum(binary == 0):
     #     binary = cv2.bitwise_not(binary)
     kernel = np.ones((5, 5), np.uint8)
     dilated = cv2.dilate(binary, kernel, iterations=1)
