@@ -12,5 +12,6 @@ torch>=2.0.0
 torchvision>=0.15.0
 ultralytics>=8.0.20
 supervision>=0.10.0
+colormath>=3.0.0
 openpyxl>=3.1.2
 requests>=2.31.0
