@@ -9,9 +9,6 @@ from PIL import Image, ImageDraw
 import os
 import pandas as pd
 from sklearn.metrics import silhouette_score
-from colormath.color_objects import LabColor, sRGBColor
-from colormath.color_conversions import convert_color
-from colormath.color_diff import delta_e_cie2000
 
 
 #  Match RGB color to nearest CSS3 color name
