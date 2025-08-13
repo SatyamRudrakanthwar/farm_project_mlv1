@@ -7,7 +7,6 @@ matplotlib==3.9.0
 scikit-learn==1.5.1
 scikit-image==0.24.0
 webcolors==1.13
-colormath==3.0.0
 openpyxl==3.1.2
 requests==2.32.
 torch==2.3.1
